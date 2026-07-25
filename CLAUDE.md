@@ -7,83 +7,113 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **SecureShip** — a shipment customer-support chat app where a locally-run LLM (Ollama) verifies user identity conversationally before granting access to shipment data. The chat *is* the product; there is no traditional login for end users.
 
 Full specification: `project_overview.md`  
-Week-by-week build plan: `development_roadmap.md`
+Week-by-week build plan: `development_roadmap.md`  
+Code lives in: `secureship/`
 
 ## Stack
 
-- **Backend:** Python, FastAPI, SQLAlchemy, Postgres 16
-- **Frontend:** React (Vite), TypeScript, React Query (via Orval), Zustand (WebSocket path only)
-- **LLM:** Ollama running on the host machine at `http://host.docker.internal:11434`; primary model `qwen3:8b`, fallback `llama3.2:3b`
-- **Auth (admin only):** Auth0, integrated via the Auth0 Agent Skills package
-- **Codegen:** Orval generates all frontend TypeScript types and React Query hooks from the backend's `/openapi.json` — nothing is hand-written
+- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (async/asyncpg), Postgres 16
+- **Frontend:** React 18 (Vite), TypeScript, React Query (via Orval), CSS Modules
+- **LLM:** Ollama on the host at `http://host.docker.internal:11434`; model `qwen3:8b` (fallback `llama3.2:3b`)
+- **Auth (admin only):** Auth0, via the Auth0 Agent Skills package (Week 4)
+- **Codegen:** Orval generates all frontend TypeScript types and React Query hooks from `/openapi.json` — nothing is hand-written
 
 ## Transport Decision
 
-Before writing any chat plumbing, the team must pick one and stick to it:
-- **HTTP (Section 6.3):** simpler; Orval generates fully-wired hooks for every endpoint
-- **WebSocket (Section 6.3b):** better real-time UX; WS message envelope types require dummy FastAPI endpoints so they appear in the OpenAPI schema for Orval to export (see `backend/routes/_types_chat_events.py`)
-
-## Architecture Constraints
-
-**Identity gate is enforced in the backend tool layer, not in the model's prompt.** The model calls tools; the backend decides whether to execute them based on `session.state`. This is the project's core teaching point — never move the check into the system prompt.
-
-**Tool layer always uses `session.customer_id`**, never a customer ID supplied by the model or the user. The `lookup_shipments` tool takes no `customer_id` parameter for this reason.
-
-**Two identity systems that must never intersect:**
-1. Conversational verification (`ChatSession.state`) — for end users, session-scoped only
-2. Auth0 JWT — for admin panel only
-
-No code path should let an admin become a verified chat session, or let a chat session reach `/admin/*` routes.
-
-**Ollama stays on the host** (not in Docker) to preserve Apple Metal GPU acceleration. The backend container reaches it via `http://host.docker.internal:11434`.
+**HTTP has been chosen.** Orval generates fully-wired React Query hooks for every endpoint. No WebSocket path.
 
 ## Commands
 
-Once the project is scaffolded, the expected commands are:
-
 ```bash
-# Start the full stack (frontend + backend + Postgres)
+# Start the full stack (run from secureship/)
 docker-compose up
 
-# Regenerate frontend types and hooks from the backend OpenAPI schema
-# Run this whenever Pydantic models or routes change
-cd frontend && npx orval
+# Rebuild after code changes that aren't hot-reloaded
+docker-compose up --build
 
-# Seed the database with mock data (25+ customers, 40-60 shipments)
+# Regenerate frontend types and hooks (run from secureship/frontend/)
+npm run generate
+
+# Seed the database with mock data
 docker-compose exec backend python scripts/seed_data.py
 
-# Pull the LLM (run once on the host machine, outside Docker)
+# Pull the LLM (host machine, once)
 ollama pull qwen3:8b
+```
+
+## Ports
+
+| Service  | Host port | Notes |
+|----------|-----------|-------|
+| Frontend | 3000      | Vite dev server |
+| Backend  | 8000      | FastAPI + uvicorn with `--reload` |
+| Postgres | **5433**  | Mapped to 5433 (not 5432) — local Postgres already occupies 5432 |
+| Ollama   | 11434     | Host machine only, not in Docker |
+
+## Project Structure
+
+```
+secureship/
+├── docker-compose.yml
+├── docs/diagrams/          # Section 6 Mermaid diagrams (regenerate in Week 5)
+├── backend/
+│   ├── main.py             # FastAPI app, lifespan creates all tables via create_all
+│   ├── db/session.py       # Async engine, SessionLocal, Base, get_db dependency
+│   ├── llm/ollama_client.py
+│   ├── models/             # Customer, Shipment, Package, ChatSession, enums
+│   ├── routes/chat.py      # POST /chat — calls Ollama, persists transcript
+│   ├── tools/              # Tool implementations (Week 2+)
+│   └── scripts/seed_data.py
+└── frontend/
+    ├── orval.config.ts     # Points at localhost:8000/openapi.json
+    └── src/
+        ├── api/generated/  # Orval output — DO NOT hand-edit
+        ├── components/ChatWindow/
+        └── lib/axiosInstance.ts  # Orval mutator function
 ```
 
 ## Data Model
 
 ```
-Customer        → id, first_name, last_name, phone_number (E.164), address
-Shipment        → id, customer_id (FK), tracking_number, status (enum), carrier, origin, destination, estimated_delivery, last_update
-Package         → id, shipment_id (FK), description, weight_kg, declared_value
-ChatSession     → id, customer_id (nullable FK), state (enum), started_at, ended_at, transcript (JSONB)
+Customer     → id (str/uuid), first_name, last_name, phone_number (E.164), address
+Shipment     → id, customer_id (FK), tracking_number, status (enum), carrier,
+               origin, destination, estimated_delivery, last_update
+Package      → id, shipment_id (FK), description, weight_kg, declared_value
+ChatSession  → id, customer_id (nullable FK), state (enum), started_at,
+               ended_at, transcript (JSONB)
 ```
 
-`ChatSession.transcript` is an array of `{role, content, timestamp, tool_calls?}` objects. Every turn must be persisted here — wire this from Week 1 before the flow gets complex.
+`ChatSession.transcript` — array of `{role, content, timestamp, tool_calls?}` objects, one pair per exchange.  
+`ChatSession.state` enum: `anonymous | collecting_identity | code_sent | awaiting_code | verified | escalated_to_human`  
+`Shipment.status` enum: `label_created | in_transit | out_for_delivery | delivered | exception`
 
-`ChatSession.state` enum: `anonymous | collecting_identity | code_sent | awaiting_code | verified | escalated_to_human`
+## Architecture Constraints
 
-## Tool Definitions
+**Identity gate is enforced in the backend tool layer, not in the model's prompt.** The model calls tools; the backend decides whether to execute them based on `session.state`. Never move the check into the system prompt.
 
-The backend exposes these tools to Ollama on every chat request. The model requests them; the backend executes them after checking session state.
+**Tool layer always uses `session.customer_id`**, never a customer ID supplied by the model or user. `lookup_shipments` takes no `customer_id` parameter.
 
-| Tool | When called | What backend does |
+**Two identity systems that must never intersect:**
+1. Conversational verification (`ChatSession.state`) — session-scoped, for end users only
+2. Auth0 JWT — admin panel only
+
+**Ollama stays on the host.** The backend reaches it via `http://host.docker.internal:11434`. Running Ollama in Docker loses Apple Metal GPU acceleration.
+
+**Session history is loaded from the DB transcript**, not from client-supplied history. The DB is the source of truth for conversation context.
+
+## Tool Definitions (Week 2+)
+
+| Tool | Parameters | What backend does |
 |---|---|---|
-| `request_identity_info()` | Model wants to start collection | Transition state to `collecting_identity` |
-| `verify_identity(first_name, last_name, address, phone_number)` | Model has collected all fields | Match against Customer table; on match → generate code, set `pending_customer_id`, transition to `code_sent` |
-| `send_verification_code(customer_id)` | (internal, post-match) | Generate 6-digit code, log to console (mock SMS) |
-| `lookup_shipments()` | Verified user asks about shipments | `SELECT * FROM shipments WHERE customer_id = session.customer_id` |
+| `request_identity_info()` | — | Transition state → `collecting_identity` |
+| `verify_identity(first_name, last_name, address, phone_number)` | strings | Match Customer table; on match → generate code, set `pending_customer_id`, state → `code_sent` |
+| `send_verification_code(customer_id)` | string | Generate 6-digit code, log to console |
+| `lookup_shipments()` | — | `SELECT … WHERE customer_id = session.customer_id` |
 
 ## Key Conventions
 
-- **No hand-written TypeScript types or fetch calls.** Run `npx orval` after any backend schema change and commit the output.
-- **Admin auth via Auth0 Agent Skills** (`npx skills add auth0/agent-skills`). Install before starting Epic E — not mid-way through.
-- **Mock data only.** All customer/shipment/package data is synthetic. The seed script lives in `scripts/seed_data.py` and must be re-runnable.
-- **Human escalation (Epic G) is purely cosmetic.** No backend logic beyond setting `state = escalated_to_human`. The fake "human" persona must still refuse to reveal shipment data to unverified sessions.
-- **The 2FA modal appears on demand**, triggered by the backend signaling `code_sent` state — it is not pre-rendered on page load.
+- **No hand-written TypeScript types or fetch calls.** Run `npm run generate` from `frontend/` after any backend schema change and commit the output.
+- **Admin auth via Auth0 Agent Skills** — install before starting Epic E, not mid-way through.
+- **Mock data only.** Seed script at `backend/scripts/seed_data.py` is re-runnable and wipes existing data first.
+- **Human escalation (Epic G) is purely cosmetic.** No backend logic beyond setting `state = escalated_to_human`.
+- **2FA modal appears on demand**, triggered by backend signalling `code_sent` state — not pre-rendered.
