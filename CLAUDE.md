@@ -50,7 +50,7 @@ docker-compose up
 cd frontend && npx orval
 
 # Seed the database with mock data (25+ customers, 40-60 shipments)
-cd backend && python scripts/seed_data.py
+docker-compose exec backend python scripts/seed_data.py
 
 # Pull the LLM (run once on the host machine, outside Docker)
 ollama pull qwen3:8b

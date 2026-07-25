@@ -1,5 +1,10 @@
-import axios from 'axios'
+import axios, { AxiosRequestConfig } from 'axios'
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const client = axios.create({
+  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:8000',
+})
 
-export const axiosInstance = axios.create({ baseURL: BASE_URL })
+// Orval mutator: called for every generated API function.
+export const axiosInstance = <T>(config: AxiosRequestConfig): Promise<T> => {
+  return client(config).then((res) => res.data as T)
+}

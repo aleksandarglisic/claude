@@ -33,5 +33,5 @@ cd frontend && npm run generate
 ## Seed mock data
 
 ```bash
-cd backend && python scripts/seed_data.py
+docker-compose exec backend python scripts/seed_data.py
 ```
