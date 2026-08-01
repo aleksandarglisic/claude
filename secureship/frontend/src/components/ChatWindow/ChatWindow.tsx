@@ -111,7 +111,11 @@ export default function ChatWindow() {
   return (
     <div className={containerClass}>
       {showModal && sessionId && (
-        <CodeModal sessionId={sessionId} onSuccess={handleVerified} />
+        <CodeModal
+          sessionId={sessionId}
+          onSuccess={handleVerified}
+          onClose={() => setShowModal(false)}
+        />
       )}
 
       <header className={styles.header}>

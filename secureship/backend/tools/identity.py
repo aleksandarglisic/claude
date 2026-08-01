@@ -172,6 +172,7 @@ async def handle_send_verification_code(session: ChatSession, db: AsyncSession) 
     session.verification_code = code
     session.code_expires_at = expires_at
     session.code_attempts = 0
+    session.state = SessionState.code_sent  # reset from awaiting_code after lockout/expiry
     await db.commit()
 
     print(f"\n[2FA CODE] Session {session.id} → new code: {code}\n", flush=True)

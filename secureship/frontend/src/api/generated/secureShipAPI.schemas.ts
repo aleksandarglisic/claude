@@ -53,9 +53,12 @@ export interface VerifyCodeRequest {
   session_id: string;
 }
 
+export type VerifyCodeResponseAttemptsRemaining = number | null;
+
 export interface VerifyCodeResponse {
   success: boolean;
   message: string;
   session_state: string;
+  attempts_remaining?: VerifyCodeResponseAttemptsRemaining;
 }
 

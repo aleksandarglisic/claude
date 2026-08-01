@@ -87,7 +87,8 @@ def _build_system_prompt(state: SessionState, first_name: str | None = None) -> 
             "\n\n"
             "A 6-digit verification code has been sent. Tell the user to enter it in the verification "
             "box that appeared on screen — do NOT ask them to type the code in this chat.\n"
-            "If they say they didn't receive it, call send_verification_code() to issue a new one."
+            "If they say they didn't receive the code, had too many failed attempts, or the code expired, "
+            "call send_verification_code() to issue a fresh code and reset their attempts."
         )
 
     if state == SessionState.verified:
@@ -200,10 +201,8 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
         messages.append({"role": entry["role"], "content": entry.get("content", "")})
     messages.append({"role": "user", "content": body.message})
 
-    show_modal = False
     executed_tool_calls: list[dict] = []
     reply = ""
-    state_before = chat_session.state
 
     # Tool execution loop — max 5 rounds to prevent runaway recursion
     for _ in range(5):
@@ -227,11 +226,6 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
             tool_result = await _execute_tool(name, args, chat_session, db)
             tool_results.append(tool_result)
             executed_tool_calls.append({"name": name, "arguments": args, "result": tool_result})
-
-        # Detect code_sent transition for modal trigger
-        if chat_session.state == SessionState.code_sent and state_before != SessionState.code_sent:
-            show_modal = True
-        state_before = chat_session.state
 
         # Refresh known_first_name if a customer was just resolved
         if not known_first_name and chat_session.pending_customer_id:
@@ -257,6 +251,9 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
         },
     ]
     await db.commit()
+
+    # show_modal is true whenever the session is waiting for a code — handles page-refresh resilience
+    show_modal = chat_session.state in (SessionState.code_sent, SessionState.awaiting_code)
 
     return ChatResponse(
         reply=reply,

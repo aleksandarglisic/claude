@@ -16,6 +16,24 @@
   max-width: 360px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
   text-align: center;
+  position: relative;
+}
+
+.closeBtn {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: #9ca3af;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+}
+
+.closeBtn:hover {
+  color: #374151;
 }
 
 .title {
@@ -56,10 +74,33 @@
   border-color: #1d4ed8;
 }
 
+.attemptsWarning {
+  font-size: 13px;
+  color: #d97706;
+  margin: -4px 0 4px;
+  font-weight: 500;
+}
+
 .error {
   font-size: 13px;
   color: #dc2626;
   margin: 0;
+}
+
+.codeInputLocked {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #9ca3af;
+}
+
+.closeLink {
+  font-size: 13px;
+  color: #1d4ed8;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
 }
 
 .button {
