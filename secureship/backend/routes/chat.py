@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,15 +8,102 @@ from sqlalchemy import select
 from db.session import get_db
 from llm.ollama_client import chat as ollama_chat, health_check
 from models.chat_session import ChatSession, SessionState
+from models.customer import Customer
+from tools.identity import (
+    TOOL_DEFINITIONS,
+    handle_request_identity_info,
+    handle_verify_identity,
+    handle_send_verification_code,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-SYSTEM_PROMPT = """You are a helpful customer support assistant for SecureShip, a parcel delivery service.
-You help customers check on their shipments and answer general shipping questions.
-Be friendly, concise, and professional.
+ESCALATION_KEYWORDS = [
+    "talk to a human",
+    "speak to a human",
+    "real person",
+    "human agent",
+    "live agent",
+    "live support",
+    "speak to someone",
+    "talk to someone",
+    "connect me to",
+    "transfer me",
+    "get a human",
+    "need a human",
+    "want a human",
+    "escalate",
+    "supervisor",
+]
 
-Note: Identity verification is not yet active. You may answer general shipping questions freely.
-"""
+
+def _is_escalation(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in ESCALATION_KEYWORDS)
+
+
+def _build_system_prompt(state: SessionState, first_name: str | None = None) -> str:
+    base = (
+        "You are SecureShip, a friendly customer support assistant for a parcel delivery service.\n"
+        "Be concise and professional. Never fabricate tracking numbers or shipment data."
+    )
+
+    if state == SessionState.anonymous:
+        return base + (
+            "\n\nThe user has NOT been verified. If they ask about their shipments or account:\n"
+            "1. Call request_identity_info() to begin identity collection.\n"
+            "2. Then collect their first name, last name, address, and phone number conversationally.\n"
+            "You may answer general shipping questions (policies, timelines) without verification."
+        )
+
+    if state == SessionState.collecting_identity:
+        return base + (
+            "\n\nYou are collecting identity information. Ask for:\n"
+            "- First and last name\n"
+            "- Street address\n"
+            "- Phone number\n\n"
+            "The user can give all details in one message. Once you have all four, call verify_identity().\n"
+            "Be natural and conversational — not a rigid form."
+        )
+
+    if state in (SessionState.code_sent, SessionState.awaiting_code):
+        return base + (
+            "\n\nA verification code has been sent. Tell the user to enter it in the verification box "
+            "that appeared on screen. Do NOT ask them to type the code in this chat.\n"
+            "If they say they didn't receive it, call send_verification_code() to resend."
+        )
+
+    if state == SessionState.verified:
+        name_part = f" {first_name}" if first_name else ""
+        return base + (
+            f"\n\nThe user{name_part} is verified. You may assist with their shipment inquiries. "
+            "Shipment lookup tools will be available in the next phase."
+        )
+
+    if state == SessionState.escalated_to_human:
+        return base + (
+            "\n\nThis session has been escalated. You are now acting as human support agent Melany. "
+            "Be warm and helpful, but you still cannot provide shipment data to an unverified visitor."
+        )
+
+    return base
+
+
+async def _execute_tool(name: str, arguments: dict, session: ChatSession, db: AsyncSession) -> dict:
+    if name == "request_identity_info":
+        return await handle_request_identity_info(session, db)
+    if name == "verify_identity":
+        return await handle_verify_identity(
+            session,
+            db,
+            first_name=arguments.get("first_name", ""),
+            last_name=arguments.get("last_name", ""),
+            address=arguments.get("address", ""),
+            phone_number=arguments.get("phone_number", ""),
+        )
+    if name == "send_verification_code":
+        return await handle_send_verification_code(session, db)
+    return {"error": f"Unknown tool: {name}"}
 
 
 class MessageIn(BaseModel):
@@ -39,60 +126,115 @@ class ChatResponse(BaseModel):
     reply: str
     session_id: str
     tool_calls: list[ToolCall] = []
+    show_modal: bool = False
+    session_state: str = "anonymous"
+    escalated: bool = False
+    known_first_name: str | None = None
 
 
 @router.post("", response_model=ChatResponse)
 async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) -> ChatResponse:
     if not await health_check():
-        from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="LLM service unavailable")
 
-    # Load or create ChatSession
     session_id = body.session_id or str(uuid.uuid4())
     result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
     chat_session = result.scalar_one_or_none()
 
     if chat_session is None:
-        chat_session = ChatSession(
-            id=session_id,
-            state=SessionState.anonymous,
-            transcript=[],
-        )
+        chat_session = ChatSession(id=session_id, state=SessionState.anonymous, transcript=[])
         db.add(chat_session)
+        await db.flush()
 
-    # Build message list for Ollama from persisted transcript
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Resolve known first name for system prompt personalisation
+    known_first_name: str | None = None
+    cust_id = chat_session.customer_id or chat_session.pending_customer_id
+    if cust_id:
+        cust_result = await db.execute(select(Customer).where(Customer.id == cust_id))
+        customer = cust_result.scalar_one_or_none()
+        if customer:
+            known_first_name = customer.first_name
+
+    # Handle escalation before touching Ollama
+    if _is_escalation(body.message) and chat_session.state != SessionState.escalated_to_human:
+        chat_session.state = SessionState.escalated_to_human
+        reply = "Thank you for your patience. Connecting you with a human agent now."
+        now = datetime.now(timezone.utc).isoformat()
+        chat_session.transcript = chat_session.transcript + [
+            {"role": "user", "content": body.message, "timestamp": now},
+            {"role": "assistant", "content": reply, "timestamp": now, "tool_calls": []},
+        ]
+        await db.commit()
+        return ChatResponse(
+            reply=reply,
+            session_id=session_id,
+            session_state=SessionState.escalated_to_human.value,
+            escalated=True,
+            known_first_name=known_first_name,
+        )
+
+    system_prompt = _build_system_prompt(chat_session.state, known_first_name)
+
+    # Rebuild conversation from persisted transcript (skip tool_calls — content is enough for history)
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
     for entry in chat_session.transcript:
-        messages.append({"role": entry["role"], "content": entry["content"]})
+        messages.append({"role": entry["role"], "content": entry.get("content", "")})
     messages.append({"role": "user", "content": body.message})
 
-    result_llm = await ollama_chat(messages=messages)
+    show_modal = False
+    executed_tool_calls: list[dict] = []
+    reply = ""
+    state_before = chat_session.state
 
-    msg = result_llm.get("message", {})
-    reply = msg.get("content", "")
-    raw_tool_calls = msg.get("tool_calls", [])
+    # Tool execution loop — max 5 rounds to prevent runaway recursion
+    for _ in range(5):
+        result_llm = await ollama_chat(messages=messages, tools=TOOL_DEFINITIONS)
+        msg = result_llm.get("message", {})
+        reply = msg.get("content", "") or ""
+        raw_tool_calls = msg.get("tool_calls", [])
 
-    tool_calls = [
-        ToolCall(
-            name=tc["function"]["name"],
-            arguments=tc["function"].get("arguments", {}),
-        )
-        for tc in raw_tool_calls
-    ]
+        if not raw_tool_calls:
+            break
 
-    # Persist both turns to transcript
+        # Execute every tool the model requested
+        tool_results = []
+        for tc in raw_tool_calls:
+            fn = tc.get("function", {})
+            name = fn.get("name", "")
+            args = fn.get("arguments", {})
+            tool_result = await _execute_tool(name, args, chat_session, db)
+            tool_results.append(tool_result)
+            executed_tool_calls.append({"name": name, "arguments": args, "result": tool_result})
+
+        # Detect code_sent transition for modal trigger
+        if chat_session.state == SessionState.code_sent and state_before != SessionState.code_sent:
+            show_modal = True
+        state_before = chat_session.state
+
+        # Feed assistant tool-call message + tool results back into the conversation
+        messages.append(msg)
+        for i, tc in enumerate(raw_tool_calls):
+            messages.append({"role": "tool", "content": str(tool_results[i])})
+
+    # Persist both turns
     now = datetime.now(timezone.utc).isoformat()
-    new_entries = [
+    chat_session.transcript = chat_session.transcript + [
         {"role": "user", "content": body.message, "timestamp": now},
         {
             "role": "assistant",
             "content": reply,
             "timestamp": now,
-            "tool_calls": [{"name": tc.name, "arguments": tc.arguments} for tc in tool_calls],
+            "tool_calls": executed_tool_calls,
         },
     ]
-    # JSONB column requires reassignment to trigger SQLAlchemy change detection
-    chat_session.transcript = chat_session.transcript + new_entries
     await db.commit()
 
-    return ChatResponse(reply=reply, session_id=session_id, tool_calls=tool_calls)
+    return ChatResponse(
+        reply=reply,
+        session_id=session_id,
+        tool_calls=[ToolCall(name=tc["name"], arguments=tc["arguments"]) for tc in executed_tool_calls],
+        show_modal=show_modal,
+        session_state=chat_session.state.value,
+        escalated=False,
+        known_first_name=known_first_name,
+    )

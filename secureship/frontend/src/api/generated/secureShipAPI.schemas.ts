@@ -12,10 +12,16 @@ export interface ChatRequest {
   history?: MessageIn[];
 }
 
+export type ChatResponseKnownFirstName = string | null;
+
 export interface ChatResponse {
   reply: string;
   session_id: string;
   tool_calls?: ToolCall[];
+  show_modal?: boolean;
+  session_state?: string;
+  escalated?: boolean;
+  known_first_name?: ChatResponseKnownFirstName;
 }
 
 export interface HTTPValidationError {
@@ -40,5 +46,16 @@ export interface ValidationError {
   loc: ValidationErrorLocItem[];
   msg: string;
   type: string;
+}
+
+export interface VerifyCodeRequest {
+  code: string;
+  session_id: string;
+}
+
+export interface VerifyCodeResponse {
+  success: boolean;
+  message: string;
+  session_state: string;
 }
 

@@ -1,0 +1,85 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 12px;
+  padding: 32px 28px;
+  width: 100%;
+  max-width: 360px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 8px;
+}
+
+.description {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.codeInput {
+  width: 160px;
+  padding: 12px 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  text-align: center;
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.codeInput:focus {
+  border-color: #1d4ed8;
+}
+
+.error {
+  font-size: 13px;
+  color: #dc2626;
+  margin: 0;
+}
+
+.button {
+  width: 100%;
+  padding: 11px 0;
+  background: #1d4ed8;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.button:hover:not(:disabled) {
+  background: #1e40af;
+}
+
+.button:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+}
