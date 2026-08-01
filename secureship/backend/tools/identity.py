@@ -52,6 +52,9 @@ TOOL_DEFINITIONS = [
 ]
 
 
+_ADDR_STOP_WORDS = {"st", "ave", "rd", "dr", "ln", "blvd", "way", "ct", "pl", "the", "and", "of", "a"}
+
+
 def _normalize_phone(phone: str) -> str:
     digits = "".join(c for c in phone if c.isdigit())
     if len(digits) == 10:
@@ -59,6 +62,35 @@ def _normalize_phone(phone: str) -> str:
     if len(digits) == 11 and digits.startswith("1"):
         return f"+{digits}"
     return f"+{digits}"
+
+
+def _match_address(user_addr: str, db_addr: str) -> bool:
+    """
+    Flexible address match that handles partial user input (no zip, abbreviated state, etc.).
+    Rules: house number must match AND at least one meaningful street keyword must match.
+    """
+    user_lower = user_addr.strip().lower()
+    db_lower = db_addr.strip().lower()
+
+    # Fast path: exact substring
+    if user_lower in db_lower or db_lower in user_lower:
+        return True
+
+    # Tokenise — strip punctuation
+    user_tokens = [t.strip(".,") for t in user_lower.split()]
+    db_tokens = set(t.strip(".,") for t in db_lower.split())
+
+    # House number must appear in both
+    user_num = next((t for t in user_tokens if t.isdigit()), None)
+    if not user_num or user_num not in db_tokens:
+        return False
+
+    # At least one non-trivial street word must also appear in the DB address
+    meaningful = {
+        t for t in user_tokens
+        if not t.isdigit() and len(t) > 2 and t not in _ADDR_STOP_WORDS
+    }
+    return bool(meaningful & db_tokens)
 
 
 def _generate_code() -> str:
@@ -92,7 +124,7 @@ async def handle_verify_identity(
     )
     customer = result.scalar_one_or_none()
 
-    # Fallback: name + address substring match
+    # Fallback: name + flexible address match
     if customer is None:
         result = await db.execute(
             select(Customer).where(
@@ -101,9 +133,8 @@ async def handle_verify_identity(
             )
         )
         candidates = result.scalars().all()
-        addr_lower = address.strip().lower()
         for c in candidates:
-            if addr_lower in c.address.lower() or c.address.lower() in addr_lower:
+            if _match_address(address, c.address):
                 customer = c
                 break
 
