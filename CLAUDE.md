@@ -61,14 +61,20 @@ secureship/
 │   ├── db/session.py       # Async engine, SessionLocal, Base, get_db dependency
 │   ├── llm/ollama_client.py
 │   ├── models/             # Customer, Shipment, Package, ChatSession, enums
-│   ├── routes/chat.py      # POST /chat — calls Ollama, persists transcript
-│   ├── tools/              # Tool implementations (Week 2+)
+│   ├── routes/
+│   │   ├── chat.py         # POST /chat — calls Ollama, persists transcript
+│   │   └── verify.py       # POST /verify-code — 2FA code check endpoint
+│   ├── tools/
+│   │   ├── identity.py     # IDENTITY_TOOLS schemas + handlers (Epic B/C)
+│   │   └── shipments.py    # SHIPMENT_TOOLS schemas + handle_lookup_shipments (Epic D/F)
 │   └── scripts/seed_data.py
 └── frontend/
     ├── orval.config.ts     # Points at localhost:8000/openapi.json
     └── src/
         ├── api/generated/  # Orval output — DO NOT hand-edit
-        ├── components/ChatWindow/
+        ├── components/
+        │   ├── ChatWindow/ # Main chat UI + escalation theater
+        │   └── CodeModal/  # 2FA code entry modal (appears on code_sent state)
         └── lib/axiosInstance.ts  # Orval mutator function
 ```
 
@@ -80,7 +86,11 @@ Shipment     → id, customer_id (FK), tracking_number, status (enum), carrier,
                origin, destination, estimated_delivery, last_update
 Package      → id, shipment_id (FK), description, weight_kg, declared_value
 ChatSession  → id, customer_id (nullable FK), state (enum), started_at,
-               ended_at, transcript (JSONB)
+               ended_at, transcript (JSONB),
+               pending_customer_id (str, nullable),
+               verification_code (VARCHAR(6), nullable),
+               code_expires_at (TIMESTAMPTZ, nullable),
+               code_attempts (int, default 0)
 ```
 
 `ChatSession.transcript` — array of `{role, content, timestamp, tool_calls?}` objects, one pair per exchange.  
@@ -93,6 +103,8 @@ ChatSession  → id, customer_id (nullable FK), state (enum), started_at,
 
 **Tool layer always uses `session.customer_id`**, never a customer ID supplied by the model or user. `lookup_shipments` takes no `customer_id` parameter.
 
+**Escalated-but-verified sessions can access shipment data.** If a user completes verification and then escalates to human, `session.customer_id` is already set. Both `_tools_for_state()` and `handle_lookup_shipments()` permit `lookup_shipments` when `state == escalated_to_human AND customer_id IS NOT NULL`. Escalating before verification still blocks data access.
+
 **Two identity systems that must never intersect:**
 1. Conversational verification (`ChatSession.state`) — session-scoped, for end users only
 2. Auth0 JWT — admin panel only
@@ -101,19 +113,32 @@ ChatSession  → id, customer_id (nullable FK), state (enum), started_at,
 
 **Session history is loaded from the DB transcript**, not from client-supplied history. The DB is the source of truth for conversation context.
 
+**qwen3:8b emits `<think>…</think>` reasoning tokens.** These are stripped from the reply before returning to the client via `_strip_thinking()` in `routes/chat.py`.
+
+**System prompt is rebuilt on every tool-loop iteration** (`messages[0]` is updated each round) so state transitions are reflected in the same exchange without an extra round-trip.
+
 ## Tool Definitions (Week 2+)
 
 | Tool | Parameters | What backend does |
 |---|---|---|
 | `request_identity_info()` | — | Transition state → `collecting_identity` |
-| `verify_identity(first_name, last_name, address, phone_number)` | strings | Match Customer table; on match → generate code, set `pending_customer_id`, state → `code_sent` |
-| `send_verification_code(customer_id)` | string | Generate 6-digit code, log to console |
-| `lookup_shipments()` | — | `SELECT … WHERE customer_id = session.customer_id` |
+| `verify_identity(first_name, last_name, address, phone_number)` | strings | Match Customer table; on match → generate 6-digit code, set `pending_customer_id`, state → `code_sent` |
+| `send_verification_code(customer_id)` | string (ignored) | Generate new code, reset attempts, state → `code_sent`; log to console |
+| `check_verification_code(code)` | string | Fallback for code typed in chat; same expiry/attempt enforcement as `/verify-code` |
+| `lookup_shipments()` | — | `SELECT … WHERE customer_id = session.customer_id`; only executes for `verified` or `escalated_to_human + customer_id` |
+
+Tools are split across two files and offered selectively:
+- `IDENTITY_TOOLS` (all 4 identity tools) — offered for every state
+- `SHIPMENT_TOOLS` (`lookup_shipments`) — added only when `state == verified` or `state == escalated_to_human AND customer_id IS NOT NULL`
+
+Code expiry: **10 minutes**. Max attempts: **3** before lockout (resend resets the counter).
 
 ## Key Conventions
 
 - **No hand-written TypeScript types or fetch calls.** Run `npm run generate` from `frontend/` after any backend schema change and commit the output.
 - **Admin auth via Auth0 Agent Skills** — install before starting Epic E, not mid-way through.
 - **Mock data only.** Seed script at `backend/scripts/seed_data.py` is re-runnable and wipes existing data first.
-- **Human escalation (Epic G) is purely cosmetic.** No backend logic beyond setting `state = escalated_to_human`.
+- **Human escalation theater is frontend-driven.** The backend only sets `state = escalated_to_human` and returns `escalated: true`. The timed sequence (color shift, Melany enters, greeting) runs entirely in `ChatWindow.tsx`.
+- **`show_modal` reflects final state, not just the transition.** This means the modal reappears correctly after a page refresh when `state` is `code_sent` or `awaiting_code`. A `suppressModal` flag in the frontend prevents jarring re-opens after the user deliberately closes it.
 - **2FA modal appears on demand**, triggered by backend signalling `code_sent` state — not pre-rendered.
+- **Address matching is fuzzy.** `_match_address()` in `tools/identity.py` requires house number + at least one meaningful street keyword. Tolerates missing zip code, state abbreviation, and partial input.
