@@ -6,9 +6,10 @@ interface CodeModalProps {
   sessionId: string
   onSuccess: () => void
   onClose: () => void
+  onRequestResend: () => void
 }
 
-export default function CodeModal({ sessionId, onSuccess, onClose }: CodeModalProps) {
+export default function CodeModal({ sessionId, onSuccess, onClose, onRequestResend }: CodeModalProps) {
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null)
@@ -75,8 +76,8 @@ export default function CodeModal({ sessionId, onSuccess, onClose }: CodeModalPr
           {error && <p className={styles.error}>{error}</p>}
 
           {isLocked ? (
-            <button type="button" className={styles.closeLink} onClick={onClose}>
-              Close and ask to resend the code
+            <button type="button" className={`${styles.button} ${styles.buttonSecondary}`} onClick={onRequestResend}>
+              Request a new code
             </button>
           ) : (
             <button
@@ -88,6 +89,12 @@ export default function CodeModal({ sessionId, onSuccess, onClose }: CodeModalPr
             </button>
           )}
         </form>
+
+        {!isLocked && (
+          <button type="button" className={styles.resendLink} onClick={onRequestResend}>
+            Didn't receive the code? Resend →
+          </button>
+        )}
       </div>
     </div>
   )

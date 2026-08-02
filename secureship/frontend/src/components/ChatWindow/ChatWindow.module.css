@@ -27,6 +27,17 @@
   color: #6b7280;
 }
 
+.verifiedBadge {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #16a34a;
+  background: #dcfce7;
+  border-radius: 20px;
+  padding: 3px 10px;
+  letter-spacing: 0.02em;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
