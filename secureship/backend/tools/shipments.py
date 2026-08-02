@@ -24,7 +24,11 @@ async def handle_lookup_shipments(session: ChatSession, db: AsyncSession) -> dic
     The check here is the single authoritative enforcement point (Epic F3).
     Week 3 will replace the stub body with the real DB query.
     """
-    if session.state != SessionState.verified or not session.customer_id:
+    can_access = (
+        session.state == SessionState.verified
+        or (session.state == SessionState.escalated_to_human and session.customer_id is not None)
+    )
+    if not can_access:
         # Return an error result — never the data — so the model cannot relay it.
         return {
             "error": "Access denied. The session is not verified.",

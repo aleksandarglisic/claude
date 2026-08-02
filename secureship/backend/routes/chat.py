@@ -103,10 +103,17 @@ def _build_system_prompt(state: SessionState, first_name: str | None = None) -> 
         )
 
     if state == SessionState.escalated_to_human:
+        if first_name:
+            return base + (
+                f"\n\nThis session has been escalated to human support. You are now acting as Melany, "
+                f"a human support agent. Be warm and empathetic. "
+                f"{first_name} was already verified before escalating — you may call lookup_shipments() "
+                f"when they ask about their packages or delivery status."
+            )
         return base + (
             "\n\nThis session has been escalated to human support. You are now acting as Melany, "
-            "a human support agent. Be warm and empathetic. You still cannot provide shipment "
-            "data to an unverified visitor — the same identity gate applies."
+            "a human support agent. Be warm and empathetic. The customer has NOT been verified — "
+            "you cannot provide shipment data. The same identity gate applies."
         )
 
     return base
@@ -134,13 +141,15 @@ async def _execute_tool(name: str, arguments: dict, session: ChatSession, db: As
     return {"error": f"Unknown tool: {name}"}
 
 
-def _tools_for_state(state: SessionState) -> list[dict]:
+def _tools_for_state(state: SessionState, customer_id: str | None = None) -> list[dict]:
     """Return the tool list appropriate for the current session state.
-    lookup_shipments is only offered to verified sessions to keep the model
+    lookup_shipments is only offered to verified sessions (or escalated sessions
+    where the customer was verified before escalating) to keep the model
     from attempting data retrieval before the identity gate is cleared."""
-    if state == SessionState.verified:
-        return IDENTITY_TOOLS + SHIPMENT_TOOLS
-    return IDENTITY_TOOLS
+    can_look_up = state == SessionState.verified or (
+        state == SessionState.escalated_to_human and customer_id is not None
+    )
+    return IDENTITY_TOOLS + SHIPMENT_TOOLS if can_look_up else IDENTITY_TOOLS
 
 
 class MessageIn(BaseModel):
@@ -226,7 +235,7 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
         # Rebuild system prompt each iteration so state transitions are reflected immediately
         messages[0] = {"role": "system", "content": _build_system_prompt(chat_session.state, known_first_name)}
 
-        result_llm = await ollama_chat(messages=messages, tools=_tools_for_state(chat_session.state))
+        result_llm = await ollama_chat(messages=messages, tools=_tools_for_state(chat_session.state, chat_session.customer_id))
         msg = result_llm.get("message", {})
         reply = _strip_thinking(msg.get("content", "") or "")
         raw_tool_calls = msg.get("tool_calls", [])
