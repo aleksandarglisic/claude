@@ -265,6 +265,14 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
         for i, tc in enumerate(raw_tool_calls):
             messages.append({"role": "tool", "content": str(tool_results[i])})
 
+    # Scrub PII from verify_identity arguments before persisting — the transcript is permanent storage.
+    # The outcome (verified/not) is what matters; the raw name/address/phone are not needed after the call.
+    _PII_TOOLS = {"verify_identity"}
+    transcript_tool_calls = [
+        {**tc, "arguments": {"_redacted": True}} if tc["name"] in _PII_TOOLS else tc
+        for tc in executed_tool_calls
+    ]
+
     # Persist both turns
     now = datetime.now(timezone.utc).isoformat()
     chat_session.transcript = chat_session.transcript + [
@@ -273,7 +281,7 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
             "role": "assistant",
             "content": reply,
             "timestamp": now,
-            "tool_calls": executed_tool_calls,
+            "tool_calls": transcript_tool_calls,
         },
     ]
     await db.commit()
