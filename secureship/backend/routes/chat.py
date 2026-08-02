@@ -11,11 +11,13 @@ from llm.ollama_client import chat as ollama_chat, health_check
 from models.chat_session import ChatSession, SessionState
 from models.customer import Customer
 from tools.identity import (
-    TOOL_DEFINITIONS,
+    IDENTITY_TOOLS,
     handle_request_identity_info,
     handle_verify_identity,
     handle_send_verification_code,
+    handle_check_verification_code,
 )
+from tools.shipments import SHIPMENT_TOOLS, handle_lookup_shipments
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -85,18 +87,19 @@ def _build_system_prompt(state: SessionState, first_name: str | None = None) -> 
     if state in (SessionState.code_sent, SessionState.awaiting_code):
         return base + (
             "\n\n"
-            "A 6-digit verification code has been sent. Tell the user to enter it in the verification "
-            "box that appeared on screen — do NOT ask them to type the code in this chat.\n"
-            "If they say they didn't receive the code, had too many failed attempts, or the code expired, "
-            "call send_verification_code() to issue a fresh code and reset their attempts."
+            "A 6-digit verification code has been sent. Direct the user to the verification box "
+            "that appeared on screen — that is the preferred way to enter the code.\n"
+            "If the user types a 6-digit code directly in this chat, call check_verification_code() with it.\n"
+            "If they didn't receive the code, the code expired, or they were locked out after too many "
+            "attempts, call send_verification_code() to issue a fresh code."
         )
 
     if state == SessionState.verified:
         name_part = f" {first_name}" if first_name else ""
         return base + (
-            f"\n\nThe user{name_part} is fully verified. Help them with any shipment questions. "
-            "Shipment lookup tools will be wired in the next phase — for now acknowledge their "
-            "questions and let them know you're looking into it."
+            f"\n\nThe user{name_part} is fully verified. "
+            "When they ask about their shipments or delivery status, call lookup_shipments() "
+            "to retrieve their data, then answer based on the result."
         )
 
     if state == SessionState.escalated_to_human:
@@ -122,8 +125,22 @@ async def _execute_tool(name: str, arguments: dict, session: ChatSession, db: As
             phone_number=arguments.get("phone_number", ""),
         )
     if name == "send_verification_code":
+        # customer_id argument is accepted but intentionally ignored
         return await handle_send_verification_code(session, db)
+    if name == "check_verification_code":
+        return await handle_check_verification_code(session, db, code=arguments.get("code", ""))
+    if name == "lookup_shipments":
+        return await handle_lookup_shipments(session, db)
     return {"error": f"Unknown tool: {name}"}
+
+
+def _tools_for_state(state: SessionState) -> list[dict]:
+    """Return the tool list appropriate for the current session state.
+    lookup_shipments is only offered to verified sessions to keep the model
+    from attempting data retrieval before the identity gate is cleared."""
+    if state == SessionState.verified:
+        return IDENTITY_TOOLS + SHIPMENT_TOOLS
+    return IDENTITY_TOOLS
 
 
 class MessageIn(BaseModel):
@@ -209,7 +226,7 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
         # Rebuild system prompt each iteration so state transitions are reflected immediately
         messages[0] = {"role": "system", "content": _build_system_prompt(chat_session.state, known_first_name)}
 
-        result_llm = await ollama_chat(messages=messages, tools=TOOL_DEFINITIONS)
+        result_llm = await ollama_chat(messages=messages, tools=_tools_for_state(chat_session.state))
         msg = result_llm.get("message", {})
         reply = _strip_thinking(msg.get("content", "") or "")
         raw_tool_calls = msg.get("tool_calls", [])

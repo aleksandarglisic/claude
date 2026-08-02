@@ -9,7 +9,9 @@ from models.chat_session import ChatSession, SessionState
 CODE_EXPIRY_MINUTES = 10
 MAX_CODE_ATTEMPTS = 3
 
-TOOL_DEFINITIONS = [
+# Tools sent to Ollama for every session state except verified.
+# Backend executes each tool call; the model only requests them.
+IDENTITY_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -45,11 +47,46 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "send_verification_code",
-            "description": "Generate and send a new 6-digit verification code. Use this if the user says they did not receive their code.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "description": (
+                "Generate and send a new 6-digit verification code to the customer. "
+                "Use this if the user didn't receive their code, the code expired, or they were locked out."
+            ),
+            "parameters": {
+                "type": "object",
+                # customer_id is accepted for API compatibility but the backend always
+                # uses session.pending_customer_id — never the model-supplied value.
+                "properties": {
+                    "customer_id": {
+                        "type": "string",
+                        "description": "Customer ID (ignored — backend uses the session's verified customer).",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_verification_code",
+            "description": (
+                "Verify a 6-digit code that the user has typed directly in this chat. "
+                "Use this only when the user provides their code in the conversation; "
+                "the verification modal is the preferred entry point."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "The 6-digit code the user provided."},
+                },
+                "required": ["code"],
+            },
         },
     },
 ]
+
+# Keep a backwards-compatible alias used by older import sites
+TOOL_DEFINITIONS = IDENTITY_TOOLS
 
 
 _ADDR_STOP_WORDS = {"st", "ave", "rd", "dr", "ln", "blvd", "way", "ct", "pl", "the", "and", "of", "a"}
@@ -72,20 +109,16 @@ def _match_address(user_addr: str, db_addr: str) -> bool:
     user_lower = user_addr.strip().lower()
     db_lower = db_addr.strip().lower()
 
-    # Fast path: exact substring
     if user_lower in db_lower or db_lower in user_lower:
         return True
 
-    # Tokenise — strip punctuation
     user_tokens = [t.strip(".,") for t in user_lower.split()]
     db_tokens = set(t.strip(".,") for t in db_lower.split())
 
-    # House number must appear in both
     user_num = next((t for t in user_tokens if t.isdigit()), None)
     if not user_num or user_num not in db_tokens:
         return False
 
-    # At least one non-trivial street word must also appear in the DB address
     meaningful = {
         t for t in user_tokens
         if not t.isdigit() and len(t) > 2 and t not in _ADDR_STOP_WORDS
@@ -96,6 +129,14 @@ def _match_address(user_addr: str, db_addr: str) -> bool:
 def _generate_code() -> str:
     return "".join(random.choices(string.digits, k=6))
 
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Tool handlers
+# ---------------------------------------------------------------------------
 
 async def handle_request_identity_info(session: ChatSession, db: AsyncSession) -> dict:
     if session.state == SessionState.anonymous:
@@ -114,7 +155,6 @@ async def handle_verify_identity(
 ) -> dict:
     normalized_phone = _normalize_phone(phone_number)
 
-    # Try exact match on name + phone first
     result = await db.execute(
         select(Customer).where(
             func.lower(Customer.first_name) == first_name.strip().lower(),
@@ -124,7 +164,6 @@ async def handle_verify_identity(
     )
     customer = result.scalar_one_or_none()
 
-    # Fallback: name + flexible address match
     if customer is None:
         result = await db.execute(
             select(Customer).where(
@@ -163,6 +202,7 @@ async def handle_verify_identity(
 
 
 async def handle_send_verification_code(session: ChatSession, db: AsyncSession) -> dict:
+    """customer_id argument is intentionally ignored — backend always uses session.pending_customer_id."""
     if not session.pending_customer_id:
         return {"status": "error", "message": "No pending identity verification found."}
 
@@ -172,9 +212,52 @@ async def handle_send_verification_code(session: ChatSession, db: AsyncSession) 
     session.verification_code = code
     session.code_expires_at = expires_at
     session.code_attempts = 0
-    session.state = SessionState.code_sent  # reset from awaiting_code after lockout/expiry
+    session.state = SessionState.code_sent
     await db.commit()
 
     print(f"\n[2FA CODE] Session {session.id} → new code: {code}\n", flush=True)
 
     return {"status": "sent", "message": "A new verification code has been sent."}
+
+
+async def handle_check_verification_code(
+    session: ChatSession,
+    db: AsyncSession,
+    code: str,
+) -> dict:
+    """Verify a code typed directly in chat. Enforces expiry and attempt limits identically to /verify-code."""
+    if session.state not in (SessionState.code_sent, SessionState.awaiting_code):
+        return {"verified": False, "message": "No verification code is currently pending."}
+
+    now = datetime.now(timezone.utc)
+
+    if session.code_expires_at and now > _aware(session.code_expires_at):
+        return {
+            "verified": False,
+            "message": "The verification code has expired. Please request a new one.",
+        }
+
+    if code != session.verification_code:
+        session.code_attempts += 1
+        session.state = SessionState.awaiting_code
+        remaining = max(MAX_CODE_ATTEMPTS - session.code_attempts, 0)
+        await db.commit()
+        if remaining > 0:
+            return {
+                "verified": False,
+                "message": f"Incorrect code. {remaining} attempt{'s' if remaining != 1 else ''} remaining.",
+                "attempts_remaining": remaining,
+            }
+        return {
+            "verified": False,
+            "message": "Too many failed attempts. Please request a new verification code.",
+            "attempts_remaining": 0,
+        }
+
+    session.state = SessionState.verified
+    session.customer_id = session.pending_customer_id
+    session.verification_code = None
+    session.code_attempts = 0
+    await db.commit()
+
+    return {"verified": True, "message": "Identity verified successfully."}
