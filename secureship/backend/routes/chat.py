@@ -102,7 +102,10 @@ def _build_system_prompt(state: SessionState, first_name: str | None = None) -> 
     if state == SessionState.verified:
         name_part = f" {first_name}" if first_name else ""
         return base + (
-            f"\n\nThe user{name_part} is fully verified. You have two tools for shipment data:\n"
+            f"\n\nIMPORTANT: The user{name_part} has already completed identity verification. "
+            "Do NOT ask for their name, address, phone number, or any verification code again. "
+            "Treat them as fully verified for this entire session.\n\n"
+            "You have two tools for shipment data:\n"
             "• lookup_shipments() — call this for general questions ('where are my packages?', "
             "'what shipments do I have?'). Returns all shipments with status and estimated delivery.\n"
             "• get_shipment_details(tracking_number) — call this when the user asks about a specific "
@@ -192,17 +195,23 @@ class ChatResponse(BaseModel):
     known_first_name: str | None = None
 
 
+class TranscriptMessage(BaseModel):
+    role: str
+    content: str
+
+
 class SessionStateResponse(BaseModel):
     session_id: str
     session_state: str
     known_first_name: str | None = None
     show_modal: bool = False
+    messages: list[TranscriptMessage] = []
 
 
 @router.get("/{session_id}/state", response_model=SessionStateResponse)
 async def get_session_state(session_id: str, db: AsyncSession = Depends(get_db)) -> SessionStateResponse:
-    """Return the current state of a session without triggering an LLM call.
-    Used by the frontend on page load to restore verified UI after a refresh."""
+    """Return current session state and visible message history without triggering an LLM call.
+    Used by the frontend on page load to restore the full chat UI after a refresh."""
     result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
     chat_session = result.scalar_one_or_none()
 
@@ -218,11 +227,20 @@ async def get_session_state(session_id: str, db: AsyncSession = Depends(get_db))
 
     show_modal = chat_session.state in (SessionState.code_sent, SessionState.awaiting_code)
 
+    # Build visible message list from transcript — skip entries with no displayable content
+    # (pure tool-call turns) and system-role entries (internal state signals).
+    messages: list[TranscriptMessage] = [
+        TranscriptMessage(role=entry["role"], content=entry["content"])
+        for entry in (chat_session.transcript or [])
+        if entry.get("role") in ("user", "assistant") and entry.get("content", "").strip()
+    ]
+
     return SessionStateResponse(
         session_id=session_id,
         session_state=chat_session.state.value,
         known_first_name=known_first_name,
         show_modal=show_modal,
+        messages=messages,
     )
 
 

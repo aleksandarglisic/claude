@@ -39,7 +39,11 @@
       "Bash(echo \"PID: $!\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\([m['name'] for m in d.get\\('models',[]\\)]\\)\")",
       "Bash(curl -s -X POST http://localhost:8000/chat -H 'Content-Type: application/json' -d '{\"message\": \"hi\"}')",
-      "Bash(curl -s -X POST http://localhost:8000/verify-code -H 'Content-Type: application/json' -d '{\"code\":\"__TRACKED_VAR__\",\"session_id\":\"adff6252-3aae-4288-a7d8-fa128b31a2f7\"}')"
+      "Bash(curl -s -X POST http://localhost:8000/verify-code -H 'Content-Type: application/json' -d '{\"code\":\"__TRACKED_VAR__\",\"session_id\":\"adff6252-3aae-4288-a7d8-fa128b31a2f7\"}')",
+      "Bash(docker network *)",
+      "Bash(git -C /Users/aleksandarglisic/Desktop/Projects/claude add /Users/aleksandarglisic/Desktop/Projects/claude/secureship/backend/routes/chat.py /Users/aleksandarglisic/Desktop/Projects/claude/secureship/backend/routes/verify.py /Users/aleksandarglisic/Desktop/Projects/claude/secureship/frontend/src/api/generated/chat/chat.ts /Users/aleksandarglisic/Desktop/Projects/claude/secureship/frontend/src/api/generated/secureShipAPI.schemas.ts /Users/aleksandarglisic/Desktop/Projects/claude/secureship/frontend/src/components/ChatWindow/ChatWindow.tsx /Users/aleksandarglisic/Desktop/Projects/claude/.claude/settings.local.json)",
+      "Bash(git -C /Users/aleksandarglisic/Desktop/Projects/claude commit -m ' *)",
+      "Bash(git -C /Users/aleksandarglisic/Desktop/Projects/claude push origin main)"
     ]
   }
 }

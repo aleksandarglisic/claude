@@ -40,6 +40,7 @@ export interface SessionStateResponse {
   session_state: string;
   known_first_name?: SessionStateResponseKnownFirstName;
   show_modal?: boolean;
+  messages?: TranscriptMessage[];
 }
 
 export type ToolCallArguments = { [key: string]: unknown };
@@ -47,6 +48,11 @@ export type ToolCallArguments = { [key: string]: unknown };
 export interface ToolCall {
   name: string;
   arguments: ToolCallArguments;
+}
+
+export interface TranscriptMessage {
+  role: string;
+  content: string;
 }
 
 export type ValidationErrorLocItem = string | number;

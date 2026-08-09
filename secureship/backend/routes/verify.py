@@ -84,6 +84,19 @@ async def verify_code(body: VerifyCodeRequest, db: AsyncSession = Depends(get_db
     session.customer_id = session.pending_customer_id
     session.verification_code = None
     session.code_attempts = 0
+
+    # Append a transcript entry so the model sees verification completed when
+    # the user sends their next message. Without this, the last chat turn is
+    # "a code has been sent" and the model re-asks for identity details.
+    now_iso = now.isoformat()
+    session.transcript = (session.transcript or []) + [
+        {
+            "role": "assistant",
+            "content": "Identity verified — you're all set! Feel free to ask about your shipments.",
+            "timestamp": now_iso,
+            "tool_calls": [],
+        }
+    ]
     await db.commit()
 
     return VerifyCodeResponse(

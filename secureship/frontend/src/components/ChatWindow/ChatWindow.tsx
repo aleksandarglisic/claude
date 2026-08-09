@@ -48,6 +48,14 @@ export default function ChatWindow() {
     if (restoredState.known_first_name) setKnownFirstName(restoredState.known_first_name)
     if (restoredState.show_modal && !suppressModal) setShowModal(true)
     if (state === 'escalated_to_human') setEscalated(true)
+    if (restoredState.messages?.length) {
+      setMessages(
+        restoredState.messages.map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        }))
+      )
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restoredState])
 

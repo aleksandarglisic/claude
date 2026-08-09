@@ -36,8 +36,8 @@ import { axiosInstance } from '../../../lib/axiosInstance';
 
 
 /**
- * Return the current state of a session without triggering an LLM call.
-Used by the frontend on page load to restore verified UI after a refresh.
+ * Return current session state and visible message history without triggering an LLM call.
+Used by the frontend on page load to restore the full chat UI after a refresh.
  * @summary Get Session State
  */
 export const getSessionStateChatSessionIdStateGet = (
