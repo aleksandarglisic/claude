@@ -37,6 +37,9 @@ npm run generate
 # Seed the database with mock data
 docker-compose exec backend python scripts/seed_data.py
 
+# Run prompt injection defense tests (Epic F2)
+docker-compose exec backend python scripts/test_prompt_injection.py
+
 # Pull the LLM (host machine, once)
 ollama pull qwen3:8b
 ```
@@ -62,12 +65,14 @@ secureship/
 │   ├── llm/ollama_client.py
 │   ├── models/             # Customer, Shipment, Package, ChatSession, enums
 │   ├── routes/
-│   │   ├── chat.py         # POST /chat — calls Ollama, persists transcript
+│   │   ├── chat.py         # POST /chat, GET /chat/{id}/state — Ollama loop, session state
 │   │   └── verify.py       # POST /verify-code — 2FA code check endpoint
 │   ├── tools/
 │   │   ├── identity.py     # IDENTITY_TOOLS schemas + handlers (Epic B/C)
-│   │   └── shipments.py    # SHIPMENT_TOOLS schemas + handle_lookup_shipments (Epic D/F)
-│   └── scripts/seed_data.py
+│   │   └── shipments.py    # SHIPMENT_TOOLS schemas + lookup/details handlers (Epic D/F)
+│   └── scripts/
+│       ├── seed_data.py
+│       └── test_prompt_injection.py  # Epic F2 gate proof — run without DB/Ollama
 └── frontend/
     ├── orval.config.ts     # Points at localhost:8000/openapi.json
     └── src/
@@ -94,6 +99,7 @@ ChatSession  → id, customer_id (nullable FK), state (enum), started_at,
 ```
 
 `ChatSession.transcript` — array of `{role, content, timestamp, tool_calls?}` objects, one pair per exchange.  
+`tool_calls` inner schema: `[{name: str, arguments: dict | {"_redacted": True}, result: dict}]` — `verify_identity` arguments are always redacted before persistence.  
 `ChatSession.state` enum: `anonymous | collecting_identity | code_sent | awaiting_code | verified | escalated_to_human`  
 `Shipment.status` enum: `label_created | in_transit | out_for_delivery | delivered | exception`
 
@@ -111,7 +117,7 @@ ChatSession  → id, customer_id (nullable FK), state (enum), started_at,
 
 **Ollama stays on the host.** The backend reaches it via `http://host.docker.internal:11434`. Running Ollama in Docker loses Apple Metal GPU acceleration.
 
-**Session history is loaded from the DB transcript**, not from client-supplied history. The DB is the source of truth for conversation context.
+**Session history is loaded from the DB transcript**, not from client-supplied history. The DB is the source of truth for conversation context. `GET /chat/{session_id}/state` returns `{session_id, session_state, known_first_name, show_modal}` — no LLM call, used only for UI restoration on page refresh.
 
 **qwen3:8b emits `<think>…</think>` reasoning tokens.** These are stripped from the reply before returning to the client via `_strip_thinking()` in `routes/chat.py`.
 
@@ -125,11 +131,12 @@ ChatSession  → id, customer_id (nullable FK), state (enum), started_at,
 | `verify_identity(first_name, last_name, address, phone_number)` | strings | Match Customer table; on match → generate 6-digit code, set `pending_customer_id`, state → `code_sent` |
 | `send_verification_code(customer_id)` | string (ignored) | Generate new code, reset attempts, state → `code_sent`; log to console |
 | `check_verification_code(code)` | string | Fallback for code typed in chat; same expiry/attempt enforcement as `/verify-code` |
-| `lookup_shipments()` | — | `SELECT … WHERE customer_id = session.customer_id`; only executes for `verified` or `escalated_to_human + customer_id` |
+| `lookup_shipments()` | — | `SELECT … WHERE customer_id = session.customer_id` with packages eager-loaded; only executes for `verified` or `escalated_to_human + customer_id` |
+| `get_shipment_details(tracking_number)` | string | Same gate; `WHERE customer_id = session.customer_id AND tracking_number = X` — returns not-found if the tracking number belongs to another customer |
 
 Tools are split across two files and offered selectively:
 - `IDENTITY_TOOLS` (all 4 identity tools) — offered for every state
-- `SHIPMENT_TOOLS` (`lookup_shipments`) — added only when `state == verified` or `state == escalated_to_human AND customer_id IS NOT NULL`
+- `SHIPMENT_TOOLS` (`lookup_shipments` + `get_shipment_details`) — added only when `state == verified` or `state == escalated_to_human AND customer_id IS NOT NULL`
 
 Code expiry: **10 minutes**. Max attempts: **3** before lockout (resend resets the counter).
 
@@ -144,4 +151,6 @@ Code expiry: **10 minutes**. Max attempts: **3** before lockout (resend resets t
 - **Address matching is fuzzy.** `_match_address()` in `tools/identity.py` requires house number + at least one meaningful street keyword. Tolerates missing zip code, state abbreviation, and partial input.
 - **`verify_identity` arguments are redacted before transcript persistence.** Name, address, and phone number are replaced with `{"_redacted": True}` in the JSONB transcript — the outcome (`verified: true/false`) is all that needs to persist. Redaction happens in `routes/chat.py` just before the `db.commit()` call.
 - **No file-based logging anywhere.** No `logging` module setup, `FileHandler`, or log config files. The only sensitive console output is the `[2FA CODE]` print in `tools/identity.py` (intentional mock-SMS substitute). Never add `logging.FileHandler` or structured log sinks that capture identity fields.
-- **Prompt injection cannot bypass the identity gate.** The gate lives in `handle_lookup_shipments()` — outside the model. A fabricated `session_id` creates a new `anonymous` row with `customer_id=None`; no prompt can change that. This is documented in the `handle_lookup_shipments` docstring.
+- **Prompt injection cannot bypass the identity gate.** The gate is `_can_access()` in `tools/shipments.py`, shared by both shipment handlers. A fabricated `session_id` creates a new `anonymous` row (`customer_id=None`); no prompt can change that. Proven by `scripts/test_prompt_injection.py` (9 cases, no DB/Ollama needed).
+- **Session state is tab-scoped.** `sessionId` is stored in `sessionStorage` (not `localStorage`) — each new tab starts a fresh anonymous session (Epic D3). On page refresh within the same tab, `GET /chat/{id}/state` restores the verified badge, `knownFirstName`, and modal state without requiring a message.
+- **Tool call history is replayed from transcript.** On each request, non-PII tool calls from previous turns are reconstructed as `{role: assistant, tool_calls}` + `{role: tool}` message pairs so the model has raw tool results in context for follow-up questions.
