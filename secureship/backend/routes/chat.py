@@ -192,6 +192,40 @@ class ChatResponse(BaseModel):
     known_first_name: str | None = None
 
 
+class SessionStateResponse(BaseModel):
+    session_id: str
+    session_state: str
+    known_first_name: str | None = None
+    show_modal: bool = False
+
+
+@router.get("/{session_id}/state", response_model=SessionStateResponse)
+async def get_session_state(session_id: str, db: AsyncSession = Depends(get_db)) -> SessionStateResponse:
+    """Return the current state of a session without triggering an LLM call.
+    Used by the frontend on page load to restore verified UI after a refresh."""
+    result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
+    chat_session = result.scalar_one_or_none()
+
+    if chat_session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    known_first_name: str | None = None
+    if chat_session.customer_id:
+        cust = await db.execute(select(Customer).where(Customer.id == chat_session.customer_id))
+        customer = cust.scalar_one_or_none()
+        if customer:
+            known_first_name = customer.first_name
+
+    show_modal = chat_session.state in (SessionState.code_sent, SessionState.awaiting_code)
+
+    return SessionStateResponse(
+        session_id=session_id,
+        session_state=chat_session.state.value,
+        known_first_name=known_first_name,
+        show_modal=show_modal,
+    )
+
+
 @router.post("", response_model=ChatResponse)
 async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) -> ChatResponse:
     if not await health_check():

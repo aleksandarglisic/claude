@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSendMessageChatPost } from '../../api/generated/chat/chat'
+import { useGetSessionStateChatSessionIdStateGet, useSendMessageChatPost } from '../../api/generated/chat/chat'
 import type { MessageIn } from '../../api/generated/secureShipAPI.schemas'
 import CodeModal from '../CodeModal/CodeModal'
 import styles from './ChatWindow.module.css'
+
+const SESSION_KEY = 'secureship_session_id'
 
 interface Message {
   role: 'user' | 'assistant' | 'system'
@@ -12,7 +14,9 @@ interface Message {
 export default function ChatWindow() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(
+    () => sessionStorage.getItem(SESSION_KEY)
+  )
   const [sessionState, setSessionState] = useState<string>('anonymous')
   const [showModal, setShowModal] = useState(false)
   // suppressModal prevents the modal from auto-reopening after the user dismisses it.
@@ -21,6 +25,31 @@ export default function ChatWindow() {
   const [escalated, setEscalated] = useState(false)
   const [knownFirstName, setKnownFirstName] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  // Persist sessionId to sessionStorage so page refreshes within the same tab
+  // reuse the session. New tabs start fresh (sessionStorage is tab-scoped).
+  useEffect(() => {
+    if (sessionId) {
+      sessionStorage.setItem(SESSION_KEY, sessionId)
+    } else {
+      sessionStorage.removeItem(SESSION_KEY)
+    }
+  }, [sessionId])
+
+  // On mount, restore session state from the backend (verified badge, modal, escalation).
+  // Runs only once; staleTime: Infinity prevents refetching on window focus.
+  const { data: restoredState } = useGetSessionStateChatSessionIdStateGet(sessionId ?? '', {
+    query: { enabled: !!sessionId, staleTime: Infinity, retry: false },
+  })
+  useEffect(() => {
+    if (!restoredState) return
+    const state = restoredState.session_state ?? 'anonymous'
+    setSessionState(state)
+    if (restoredState.known_first_name) setKnownFirstName(restoredState.known_first_name)
+    if (restoredState.show_modal && !suppressModal) setShowModal(true)
+    if (state === 'escalated_to_human') setEscalated(true)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoredState])
 
   const { mutate: sendMessage, isPending } = useSendMessageChatPost({
     mutation: {

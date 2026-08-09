@@ -5,23 +5,126 @@
  * OpenAPI spec version: 0.1.0
  */
 import {
-  useMutation
+  useMutation,
+  useQuery
 } from '@tanstack/react-query';
 import type {
+  DataTag,
+  DefinedInitialDataOptions,
+  DefinedUseQueryResult,
   MutationFunction,
   QueryClient,
+  QueryFunction,
+  QueryKey,
+  UndefinedInitialDataOptions,
   UseMutationOptions,
-  UseMutationResult
+  UseMutationResult,
+  UseQueryOptions,
+  UseQueryResult
 } from '@tanstack/react-query';
 
 import type {
   ChatRequest,
   ChatResponse,
-  HTTPValidationError
+  HTTPValidationError,
+  SessionStateResponse
 } from '../secureShipAPI.schemas';
 
 import { axiosInstance } from '../../../lib/axiosInstance';
 
+
+
+
+/**
+ * Return the current state of a session without triggering an LLM call.
+Used by the frontend on page load to restore verified UI after a refresh.
+ * @summary Get Session State
+ */
+export const getSessionStateChatSessionIdStateGet = (
+    sessionId: string,
+ signal?: AbortSignal
+) => {
+      
+      
+      return axiosInstance<SessionStateResponse>(
+      {url: `/chat/${sessionId}/state`, method: 'GET', signal
+    },
+      );
+    }
+  
+
+
+
+export const getGetSessionStateChatSessionIdStateGetQueryKey = (sessionId?: string,) => {
+    return [
+    `/chat/${sessionId}/state`
+    ] as const;
+    }
+
+    
+export const getGetSessionStateChatSessionIdStateGetQueryOptions = <TData = Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError = HTTPValidationError>(sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError, TData>>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSessionStateChatSessionIdStateGetQueryKey(sessionId);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>> = ({ signal }) => getSessionStateChatSessionIdStateGet(sessionId, signal);
+
+      
+
+      
+
+   return  { queryKey, queryFn, enabled: !!(sessionId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetSessionStateChatSessionIdStateGetQueryResult = NonNullable<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>>
+export type GetSessionStateChatSessionIdStateGetQueryError = HTTPValidationError
+
+
+export function useGetSessionStateChatSessionIdStateGet<TData = Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError = HTTPValidationError>(
+ sessionId: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>,
+          TError,
+          Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>
+        > , 'initialData'
+      >, }
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSessionStateChatSessionIdStateGet<TData = Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError = HTTPValidationError>(
+ sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>,
+          TError,
+          Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>
+        > , 'initialData'
+      >, }
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSessionStateChatSessionIdStateGet<TData = Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError = HTTPValidationError>(
+ sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError, TData>>, }
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Session State
+ */
+
+export function useGetSessionStateChatSessionIdStateGet<TData = Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError = HTTPValidationError>(
+ sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionStateChatSessionIdStateGet>>, TError, TData>>, }
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetSessionStateChatSessionIdStateGetQueryOptions(sessionId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  query.queryKey = queryOptions.queryKey ;
+
+  return query;
+}
 
 
 

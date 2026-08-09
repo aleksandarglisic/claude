@@ -33,6 +33,15 @@ export interface MessageIn {
   content: string;
 }
 
+export type SessionStateResponseKnownFirstName = string | null;
+
+export interface SessionStateResponse {
+  session_id: string;
+  session_state: string;
+  known_first_name?: SessionStateResponseKnownFirstName;
+  show_modal?: boolean;
+}
+
 export type ToolCallArguments = { [key: string]: unknown };
 
 export interface ToolCall {
