@@ -17,9 +17,14 @@ from tools.identity import (
     handle_send_verification_code,
     handle_check_verification_code,
 )
-from tools.shipments import SHIPMENT_TOOLS, handle_lookup_shipments
+from tools.shipments import SHIPMENT_TOOLS, handle_lookup_shipments, handle_get_shipment_details
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+# Tool calls whose arguments are redacted in the transcript (PII).
+# These are skipped during history reconstruction — the session state already
+# encodes the outcome; replaying the raw call adds no value for the model.
+_PII_TOOLS = frozenset({"verify_identity"})
 
 ESCALATION_KEYWORDS = [
     "talk to a human",
@@ -97,18 +102,25 @@ def _build_system_prompt(state: SessionState, first_name: str | None = None) -> 
     if state == SessionState.verified:
         name_part = f" {first_name}" if first_name else ""
         return base + (
-            f"\n\nThe user{name_part} is fully verified. "
-            "When they ask about their shipments or delivery status, call lookup_shipments() "
-            "to retrieve their data, then answer based on the result."
+            f"\n\nThe user{name_part} is fully verified. You have two tools for shipment data:\n"
+            "• lookup_shipments() — call this for general questions ('where are my packages?', "
+            "'what shipments do I have?'). Returns all shipments with status and estimated delivery.\n"
+            "• get_shipment_details(tracking_number) — call this when the user asks about a specific "
+            "tracking number or wants full detail on one shipment, including package contents.\n\n"
+            "Always base your answer on the tool result. Never fabricate or guess shipment data. "
+            "If the user asks about a tracking number that belongs to someone else, the tool will "
+            "return not-found — report that honestly without explaining why."
         )
 
     if state == SessionState.escalated_to_human:
         if first_name:
             return base + (
                 f"\n\nThis session has been escalated to human support. You are now acting as Melany, "
-                f"a human support agent. Be warm and empathetic. "
-                f"{first_name} was already verified before escalating — you may call lookup_shipments() "
-                f"when they ask about their packages or delivery status."
+                f"a human support agent. Be warm and empathetic.\n\n"
+                f"{first_name} was already verified before escalating. You have two tools:\n"
+                f"• lookup_shipments() — for an overview of their shipments.\n"
+                f"• get_shipment_details(tracking_number) — for detail on a specific shipment.\n"
+                f"Always base your answer on the tool result."
             )
         return base + (
             "\n\nThis session has been escalated to human support. You are now acting as Melany, "
@@ -138,6 +150,8 @@ async def _execute_tool(name: str, arguments: dict, session: ChatSession, db: As
         return await handle_check_verification_code(session, db, code=arguments.get("code", ""))
     if name == "lookup_shipments":
         return await handle_lookup_shipments(session, db)
+    if name == "get_shipment_details":
+        return await handle_get_shipment_details(session, db, tracking_number=arguments.get("tracking_number", ""))
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -221,10 +235,30 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
 
     system_prompt = _build_system_prompt(chat_session.state, known_first_name)
 
-    # Rebuild conversation from persisted transcript (skip tool_calls — content is enough for history)
+    # Rebuild conversation from persisted transcript, reconstructing tool call chains so the
+    # model has access to raw tool results when answering follow-up questions.
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     for entry in chat_session.transcript:
-        messages.append({"role": entry["role"], "content": entry.get("content", "")})
+        if entry["role"] == "user":
+            messages.append({"role": "user", "content": entry.get("content", "")})
+        elif entry["role"] == "assistant":
+            tool_calls = entry.get("tool_calls") or []
+            # Reconstruct each non-PII tool call as assistant-request + tool-result pair.
+            replayable = [tc for tc in tool_calls if tc["name"] not in _PII_TOOLS]
+            for tc in replayable:
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"function": {"name": tc["name"], "arguments": tc.get("arguments") or {}}}
+                    ],
+                })
+                messages.append({"role": "tool", "content": str(tc.get("result", ""))})
+            # Append the final text reply if present.
+            if entry.get("content"):
+                messages.append({"role": "assistant", "content": entry["content"]})
+            elif not replayable:
+                messages.append({"role": "assistant", "content": ""})
     messages.append({"role": "user", "content": body.message})
 
     executed_tool_calls: list[dict] = []
@@ -267,7 +301,6 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
 
     # Scrub PII from verify_identity arguments before persisting — the transcript is permanent storage.
     # The outcome (verified/not) is what matters; the raw name/address/phone are not needed after the call.
-    _PII_TOOLS = {"verify_identity"}
     transcript_tool_calls = [
         {**tc, "arguments": {"_redacted": True}} if tc["name"] in _PII_TOOLS else tc
         for tc in executed_tool_calls
