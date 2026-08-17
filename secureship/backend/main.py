@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from db.session import engine, Base
 import models  # noqa: F401 — registers all ORM models with Base before create_all
+from routes.admin import router as admin_router
 from routes.chat import router as chat_router
 from routes.verify import router as verify_router
 
@@ -26,6 +27,7 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(verify_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")

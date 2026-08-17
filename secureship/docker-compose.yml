@@ -7,6 +7,9 @@ services:
       - backend
     environment:
       - VITE_API_URL=http://localhost:8000
+      - VITE_AUTH0_DOMAIN=${AUTH0_DOMAIN}
+      - VITE_AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID}
+      - VITE_AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
 
   backend:
     build: ./backend
@@ -15,6 +18,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://secureship:secureship@postgres:5432/secureship
       - OLLAMA_HOST=http://host.docker.internal:11434
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN}
+      - AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
     depends_on:
       postgres:
         condition: service_healthy

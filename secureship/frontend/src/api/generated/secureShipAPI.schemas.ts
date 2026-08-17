@@ -24,6 +24,36 @@ export interface ChatResponse {
   known_first_name?: ChatResponseKnownFirstName;
 }
 
+export interface CustomerCreate {
+  first_name: string;
+  last_name: string;
+  phone_number: string;
+  address: string;
+}
+
+export interface CustomerResponse {
+  id: string;
+  first_name: string;
+  last_name: string;
+  phone_number: string;
+  address: string;
+}
+
+export type CustomerUpdateFirstName = string | null;
+
+export type CustomerUpdateLastName = string | null;
+
+export type CustomerUpdatePhoneNumber = string | null;
+
+export type CustomerUpdateAddress = string | null;
+
+export interface CustomerUpdate {
+  first_name?: CustomerUpdateFirstName;
+  last_name?: CustomerUpdateLastName;
+  phone_number?: CustomerUpdatePhoneNumber;
+  address?: CustomerUpdateAddress;
+}
+
 export interface HTTPValidationError {
   detail?: ValidationError[];
 }
@@ -31,6 +61,37 @@ export interface HTTPValidationError {
 export interface MessageIn {
   role: string;
   content: string;
+}
+
+export type PackageCreateWeightKg = number | string;
+
+export type PackageCreateDeclaredValue = number | string;
+
+export interface PackageCreate {
+  shipment_id: string;
+  description: string;
+  weight_kg: PackageCreateWeightKg;
+  declared_value: PackageCreateDeclaredValue;
+}
+
+export interface PackageResponse {
+  id: string;
+  shipment_id: string;
+  description: string;
+  weight_kg: string;
+  declared_value: string;
+}
+
+export type PackageUpdateDescription = string | null;
+
+export type PackageUpdateWeightKg = number | string | null;
+
+export type PackageUpdateDeclaredValue = number | string | null;
+
+export interface PackageUpdate {
+  description?: PackageUpdateDescription;
+  weight_kg?: PackageUpdateWeightKg;
+  declared_value?: PackageUpdateDeclaredValue;
 }
 
 export type SessionStateResponseKnownFirstName = string | null;
@@ -41,6 +102,62 @@ export interface SessionStateResponse {
   known_first_name?: SessionStateResponseKnownFirstName;
   show_modal?: boolean;
   messages?: TranscriptMessage[];
+}
+
+export interface ShipmentCreate {
+  customer_id: string;
+  tracking_number: string;
+  status: ShipmentStatus;
+  carrier: string;
+  origin: string;
+  destination: string;
+  estimated_delivery: string;
+}
+
+export interface ShipmentResponse {
+  id: string;
+  customer_id: string;
+  tracking_number: string;
+  status: ShipmentStatus;
+  carrier: string;
+  origin: string;
+  destination: string;
+  estimated_delivery: string;
+  last_update: string;
+  packages?: PackageResponse[];
+}
+
+export type ShipmentStatus = typeof ShipmentStatus[keyof typeof ShipmentStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ShipmentStatus = {
+  label_created: 'label_created',
+  in_transit: 'in_transit',
+  out_for_delivery: 'out_for_delivery',
+  delivered: 'delivered',
+  exception: 'exception',
+} as const;
+
+export type ShipmentUpdateTrackingNumber = string | null;
+
+export type ShipmentUpdateStatus = ShipmentStatus | null;
+
+export type ShipmentUpdateCarrier = string | null;
+
+export type ShipmentUpdateOrigin = string | null;
+
+export type ShipmentUpdateDestination = string | null;
+
+export type ShipmentUpdateEstimatedDelivery = string | null;
+
+export interface ShipmentUpdate {
+  tracking_number?: ShipmentUpdateTrackingNumber;
+  status?: ShipmentUpdateStatus;
+  carrier?: ShipmentUpdateCarrier;
+  origin?: ShipmentUpdateOrigin;
+  destination?: ShipmentUpdateDestination;
+  estimated_delivery?: ShipmentUpdateEstimatedDelivery;
 }
 
 export type ToolCallArguments = { [key: string]: unknown };
@@ -76,4 +193,10 @@ export interface VerifyCodeResponse {
   session_state: string;
   attempts_remaining?: VerifyCodeResponseAttemptsRemaining;
 }
+
+export type AdminMeAdminMeGet200 = { [key: string]: unknown };
+
+export type ListPackagesAdminPackagesGetParams = {
+shipment_id?: string | null;
+};
 
