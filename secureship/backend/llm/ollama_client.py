@@ -16,6 +16,9 @@ async def chat(
         "model": model,
         "messages": messages,
         "stream": stream,
+        # Disable qwen3 extended reasoning — we strip <think> blocks anyway and
+        # thinking mode adds 10-30 s of token generation before the actual reply.
+        "think": False,
     }
     if tools:
         payload["tools"] = tools
