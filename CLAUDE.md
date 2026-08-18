@@ -40,6 +40,9 @@ docker-compose exec backend python scripts/seed_data.py
 # Run prompt injection defense tests (Epic F2)
 docker-compose exec backend python scripts/test_prompt_injection.py
 
+# Run identity-system separation guarantee tests (Epic E4)
+docker-compose exec backend python scripts/test_separation.py
+
 # Pull the LLM (host machine, once)
 ollama pull qwen3:8b
 ```
@@ -70,17 +73,27 @@ secureship/
 │   ├── tools/
 │   │   ├── identity.py     # IDENTITY_TOOLS schemas + handlers (Epic B/C)
 │   │   └── shipments.py    # SHIPMENT_TOOLS schemas + lookup/details handlers (Epic D/F)
+│   ├── auth/
+│   │   └── auth0.py            # JWKS-based JWT validation, require_admin dependency (Epic E)
+│   ├── schemas/
+│   │   └── admin.py            # Pydantic Create/Update/Response models for admin CRUD
 │   └── scripts/
 │       ├── seed_data.py
-│       └── test_prompt_injection.py  # Epic F2 gate proof — run without DB/Ollama
+│       ├── test_prompt_injection.py  # Epic F2 gate proof — run without DB/Ollama
+│       └── test_separation.py        # Epic E4 gate proof — 16 AST checks, no DB/Ollama needed
 └── frontend/
     ├── orval.config.ts     # Points at localhost:8000/openapi.json
     └── src/
         ├── api/generated/  # Orval output — DO NOT hand-edit
         ├── components/
-        │   ├── ChatWindow/ # Main chat UI + escalation theater
-        │   └── CodeModal/  # 2FA code entry modal (appears on code_sent state)
-        └── lib/axiosInstance.ts  # Orval mutator function
+        │   ├── ChatWindow/   # Main chat UI + escalation theater
+        │   ├── CodeModal/    # 2FA code entry modal (appears on code_sent state)
+        │   └── AdminPanel/   # Auth0-protected admin panel (Epic E/E2/E3)
+        │       ├── AdminPanel.tsx        # Tab nav, Auth0 auth, token wiring
+        │       ├── CustomerManager.tsx   # Full CRUD for customers
+        │       ├── ShipmentManager.tsx   # Full CRUD for shipments + packages
+        │       └── Manager.module.css    # Shared table/form/badge styles
+        └── lib/axiosInstance.ts  # Orval mutator; setTokenGetter() wires Auth0 JWT
 ```
 
 ## Data Model
@@ -143,7 +156,7 @@ Code expiry: **10 minutes**. Max attempts: **3** before lockout (resend resets t
 ## Key Conventions
 
 - **No hand-written TypeScript types or fetch calls.** Run `npm run generate` from `frontend/` after any backend schema change and commit the output.
-- **Admin auth via Auth0 Agent Skills** — install before starting Epic E, not mid-way through.
+- **Admin auth via Auth0 JWT (python-jose JWKS).** `auth/auth0.py` exposes `require_admin` FastAPI dependency used on every `/admin/*` route. Frontend wires the token via `setTokenGetter(getAccessTokenSilently)` in `AdminPanel.tsx` so Orval-generated hooks attach `Authorization: Bearer <token>` automatically.
 - **Mock data only.** Seed script at `backend/scripts/seed_data.py` is re-runnable and wipes existing data first.
 - **Human escalation theater is frontend-driven.** The backend only sets `state = escalated_to_human` and returns `escalated: true`. The timed sequence (color shift, Melany enters, greeting) runs entirely in `ChatWindow.tsx`.
 - **`show_modal` reflects final state, not just the transition.** This means the modal reappears correctly after a page refresh when `state` is `code_sent` or `awaiting_code`. A `suppressModal` flag in the frontend prevents jarring re-opens after the user deliberately closes it.
@@ -156,3 +169,6 @@ Code expiry: **10 minutes**. Max attempts: **3** before lockout (resend resets t
 - **Frontend requires `--build` after source changes.** The frontend Docker container has no volume mount — Vite's HMR only applies within a running container. Any change to frontend source files requires `docker-compose up --build` to take effect. Backend is exempt (uvicorn `--reload` + volume mount).
 - **`verify.py` appends a synthetic assistant turn on successful 2FA.** Without it, the model's next turn sees history ending at "code has been sent" and re-asks for identity details. The synthetic turn `{"role": "assistant", "content": "Identity verified — you're all set!..."}` closes the loop.
 - **Tool call history is replayed from transcript.** On each request, non-PII tool calls from previous turns are reconstructed as `{role: assistant, tool_calls}` + `{role: tool}` message pairs so the model has raw tool results in context for follow-up questions.
+- **Admin panel backend schema lives in `backend/schemas/admin.py`.** Pydantic `Create/Update/Response` models for Customer, Shipment, and Package. Run `npm run generate` from `frontend/` after any schema change to keep Orval types in sync.
+- **Auth0 env vars required to use the admin panel.** Copy `secureship/.env.example` to `secureship/.env` and fill in `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_AUDIENCE`. Add `http://localhost:3000/admin` to Allowed Callback URLs in the Auth0 dashboard.
+- **Identity system separation is proven by `scripts/test_separation.py` (Epic E4).** 16 AST-based checks verify at the import/reference level that admin routes never touch `ChatSession`/`SessionState`/tools, and chat routes never touch `auth/`. Run without DB or Ollama. Fails loudly (exit 1) if any check breaks.
