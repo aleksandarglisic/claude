@@ -1,8 +1,8 @@
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -182,10 +182,25 @@ class MessageIn(BaseModel):
     content: str
 
 
+_MAX_MESSAGE_LENGTH = 2000
+# Unverified sessions older than this are reset so users can't resume stale identity flows.
+_SESSION_TIMEOUT_HOURS = 24
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     history: list[MessageIn] = []
+
+    @field_validator("message")
+    @classmethod
+    def message_must_be_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Message cannot be empty")
+        if len(v) > _MAX_MESSAGE_LENGTH:
+            raise ValueError(f"Message exceeds {_MAX_MESSAGE_LENGTH} character limit")
+        return v
 
 
 class ToolCall(BaseModel):
@@ -265,6 +280,20 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
         chat_session = ChatSession(id=session_id, state=SessionState.anonymous, transcript=[])
         db.add(chat_session)
         await db.flush()
+    else:
+        # Reset sessions that have been idle too long and are not yet verified.
+        # Verified and escalated sessions are kept — the user completed the gate.
+        unverified = chat_session.state not in (SessionState.verified, SessionState.escalated_to_human)
+        if unverified and chat_session.started_at:
+            age = datetime.now(timezone.utc) - chat_session.started_at.replace(tzinfo=timezone.utc)
+            if age > timedelta(hours=_SESSION_TIMEOUT_HOURS):
+                chat_session.state = SessionState.anonymous
+                chat_session.transcript = []
+                chat_session.pending_customer_id = None
+                chat_session.verification_code = None
+                chat_session.code_attempts = 0
+                chat_session.code_expires_at = None
+                await db.flush()
 
     # Resolve known first name for system prompt personalisation
     known_first_name: str | None = None

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -14,6 +14,14 @@ router = APIRouter(prefix="/verify-code", tags=["verify"])
 class VerifyCodeRequest(BaseModel):
     code: str
     session_id: str
+
+    @field_validator("code")
+    @classmethod
+    def code_must_be_digits(cls, v: str) -> str:
+        v = v.strip()
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError("Verification code must be exactly 6 digits")
+        return v
 
 
 class VerifyCodeResponse(BaseModel):
