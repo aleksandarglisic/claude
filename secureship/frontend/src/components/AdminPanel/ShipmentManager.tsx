@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   useListShipmentsAdminShipmentsGet,
@@ -225,8 +225,8 @@ export default function ShipmentManager() {
               <tr><td colSpan={8} className={styles.empty}>No shipments yet.</td></tr>
             )}
             {shipments.map(s => (
-              <>
-                <tr key={s.id} className={confirmDelete === s.id ? styles.rowDanger : ''}>
+              <Fragment key={s.id}>
+                <tr className={confirmDelete === s.id ? styles.rowDanger : ''}>
                   <td>
                     <button className={styles.expandBtn}
                       onClick={() => setExpanded(expanded === s.id ? null : s.id)}>
@@ -259,7 +259,7 @@ export default function ShipmentManager() {
                   </td>
                 </tr>
                 {expanded === s.id && (
-                  <tr key={`${s.id}-pkg`} className={styles.pkgRow}>
+                  <tr className={styles.pkgRow}>
                     <td colSpan={8}>
                       <div className={styles.pkgPanel}>
                         <strong>Packages</strong>
@@ -309,7 +309,7 @@ export default function ShipmentManager() {
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>

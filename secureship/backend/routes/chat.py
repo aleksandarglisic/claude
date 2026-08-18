@@ -22,9 +22,14 @@ from tools.shipments import SHIPMENT_TOOLS, handle_lookup_shipments, handle_get_
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 # Tool calls whose arguments are redacted in the transcript (PII).
-# These are skipped during history reconstruction — the session state already
-# encodes the outcome; replaying the raw call adds no value for the model.
 _PII_TOOLS = frozenset({"verify_identity"})
+
+# Shipment tool results are NOT replayed into conversation history.
+# Their data changes (admin edits packages/status), so replaying a stale result
+# causes the model to answer from old data instead of calling the tool again.
+# The assistant's text reply already carries the summary; omitting the raw
+# tool result here forces a fresh DB query on every new question.
+_NO_REPLAY_TOOLS = frozenset({"lookup_shipments", "get_shipment_details"})
 
 ESCALATION_KEYWORDS = [
     "talk to a human",
@@ -110,7 +115,10 @@ def _build_system_prompt(state: SessionState, first_name: str | None = None) -> 
             "'what shipments do I have?'). Returns all shipments with status and estimated delivery.\n"
             "• get_shipment_details(tracking_number) — call this when the user asks about a specific "
             "tracking number or wants full detail on one shipment, including package contents.\n\n"
-            "Always base your answer on the tool result. Never fabricate or guess shipment data. "
+            "CRITICAL: You MUST call the appropriate tool every single time the user asks about "
+            "shipments or packages — even if you answered a similar question earlier in this "
+            "conversation. Do NOT answer from previous messages; the data may have changed. "
+            "Never fabricate or guess shipment data. "
             "If the user asks about a tracking number that belongs to someone else, the tool will "
             "return not-found — report that honestly without explaining why."
         )
@@ -123,7 +131,7 @@ def _build_system_prompt(state: SessionState, first_name: str | None = None) -> 
                 f"{first_name} was already verified before escalating. You have two tools:\n"
                 f"• lookup_shipments() — for an overview of their shipments.\n"
                 f"• get_shipment_details(tracking_number) — for detail on a specific shipment.\n"
-                f"Always base your answer on the tool result."
+                f"CRITICAL: Call the tool every time — never answer from earlier messages in this conversation."
             )
         return base + (
             "\n\nThis session has been escalated to human support. You are now acting as Melany, "
@@ -295,8 +303,10 @@ async def send_message(body: ChatRequest, db: AsyncSession = Depends(get_db)) ->
             messages.append({"role": "user", "content": entry.get("content", "")})
         elif entry["role"] == "assistant":
             tool_calls = entry.get("tool_calls") or []
-            # Reconstruct each non-PII tool call as assistant-request + tool-result pair.
-            replayable = [tc for tc in tool_calls if tc["name"] not in _PII_TOOLS]
+            # Reconstruct non-PII, non-stale tool calls as assistant-request + tool-result pairs.
+            # Shipment tools are excluded so the model re-queries on every new message
+            # rather than answering from a potentially stale cached result.
+            replayable = [tc for tc in tool_calls if tc["name"] not in _PII_TOOLS | _NO_REPLAY_TOOLS]
             for tc in replayable:
                 messages.append({
                     "role": "assistant",

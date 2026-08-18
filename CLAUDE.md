@@ -15,7 +15,7 @@ Code lives in: `secureship/`
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (async/asyncpg), Postgres 16
 - **Frontend:** React 18 (Vite), TypeScript, React Query (via Orval), CSS Modules
 - **LLM:** Ollama on the host at `http://host.docker.internal:11434`; model `qwen3:8b` (fallback `llama3.2:3b`)
-- **Auth (admin only):** Auth0, via the Auth0 Agent Skills package (Week 4)
+- **Auth (admin only):** Auth0 — JWKS-based RS256 JWT validation via `python-jose` (`auth/auth0.py`); `@auth0/auth0-react` on the frontend
 - **Codegen:** Orval generates all frontend TypeScript types and React Query hooks from `/openapi.json` — nothing is hand-written
 
 ## Transport Decision
@@ -68,6 +68,7 @@ secureship/
 │   ├── llm/ollama_client.py
 │   ├── models/             # Customer, Shipment, Package, ChatSession, enums
 │   ├── routes/
+│   │   ├── admin.py        # GET/POST/PUT/DELETE /admin/* — Auth0-protected CRUD (Epic E2/E3)
 │   │   ├── chat.py         # POST /chat, GET /chat/{id}/state — Ollama loop, session state
 │   │   └── verify.py       # POST /verify-code — 2FA code check endpoint
 │   ├── tools/
@@ -168,7 +169,7 @@ Code expiry: **10 minutes**. Max attempts: **3** before lockout (resend resets t
 - **Session state is tab-scoped.** `sessionId` is stored in `sessionStorage` (not `localStorage`) — each new tab starts a fresh anonymous session (Epic D3). On page refresh within the same tab, `GET /chat/{id}/state` restores the full message history, verified badge, `knownFirstName`, and modal state without requiring a message.
 - **Frontend requires `--build` after source changes.** The frontend Docker container has no volume mount — Vite's HMR only applies within a running container. Any change to frontend source files requires `docker-compose up --build` to take effect. Backend is exempt (uvicorn `--reload` + volume mount).
 - **`verify.py` appends a synthetic assistant turn on successful 2FA.** Without it, the model's next turn sees history ending at "code has been sent" and re-asks for identity details. The synthetic turn `{"role": "assistant", "content": "Identity verified — you're all set!..."}` closes the loop.
-- **Tool call history is replayed from transcript.** On each request, non-PII tool calls from previous turns are reconstructed as `{role: assistant, tool_calls}` + `{role: tool}` message pairs so the model has raw tool results in context for follow-up questions.
+- **Tool call history is replayed from transcript — with exceptions.** Identity tool calls (`request_identity_info`, `send_verification_code`, `check_verification_code`) are replayed as `{role: assistant, tool_calls}` + `{role: tool}` pairs so the model has state-transition context. Shipment tools (`lookup_shipments`, `get_shipment_details`) are NOT replayed (`_NO_REPLAY_TOOLS` in `routes/chat.py`) — their data changes when admins edit packages/status, so replaying a stale result causes the model to answer from old data. Omitting them forces a fresh DB query on every new question.
 - **Admin panel backend schema lives in `backend/schemas/admin.py`.** Pydantic `Create/Update/Response` models for Customer, Shipment, and Package. Run `npm run generate` from `frontend/` after any schema change to keep Orval types in sync.
 - **Auth0 env vars required to use the admin panel.** Copy `secureship/.env.example` to `secureship/.env` and fill in `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_AUDIENCE`. Add `http://localhost:3000/admin` to Allowed Callback URLs in the Auth0 dashboard.
 - **Identity system separation is proven by `scripts/test_separation.py` (Epic E4).** 16 AST-based checks verify at the import/reference level that admin routes never touch `ChatSession`/`SessionState`/tools, and chat routes never touch `auth/`. Run without DB or Ollama. Fails loudly (exit 1) if any check breaks.
