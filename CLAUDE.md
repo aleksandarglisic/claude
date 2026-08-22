@@ -43,6 +43,9 @@ docker-compose exec backend python scripts/test_prompt_injection.py
 # Run identity-system separation guarantee tests (Epic E4)
 docker-compose exec backend python scripts/test_separation.py
 
+# Run Week 5 final security pass — 33 checks across 4 gates (no DB or Ollama needed)
+docker-compose exec backend python scripts/test_security_pass.py
+
 # Pull the LLM (host machine, once)
 ollama pull qwen3:8b
 ```
@@ -81,7 +84,8 @@ secureship/
 │   └── scripts/
 │       ├── seed_data.py
 │       ├── test_prompt_injection.py  # Epic F2 gate proof — run without DB/Ollama
-│       └── test_separation.py        # Epic E4 gate proof — 16 AST checks, no DB/Ollama needed
+│       ├── test_separation.py        # Epic E4 gate proof — 16 AST checks, no DB/Ollama needed
+│       └── test_security_pass.py     # Week 5 final security pass — 33 checks, 4 gates, no DB/Ollama needed
 └── frontend/
     ├── orval.config.ts     # Points at localhost:8000/openapi.json
     └── src/
@@ -173,3 +177,4 @@ Code expiry: **10 minutes**. Max attempts: **3** before lockout (resend resets t
 - **Admin panel backend schema lives in `backend/schemas/admin.py`.** Pydantic `Create/Update/Response` models for Customer, Shipment, and Package. Run `npm run generate` from `frontend/` after any schema change to keep Orval types in sync.
 - **Auth0 env vars required to use the admin panel.** Copy `secureship/.env.example` to `secureship/.env` and fill in `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_AUDIENCE`. Add `http://localhost:3000/admin` to Allowed Callback URLs in the Auth0 dashboard.
 - **Identity system separation is proven by `scripts/test_separation.py` (Epic E4).** 16 AST-based checks verify at the import/reference level that admin routes never touch `ChatSession`/`SessionState`/tools, and chat routes never touch `auth/`. Run without DB or Ollama. Fails loudly (exit 1) if any check breaks.
+- **Week 5 final security pass is in `scripts/test_security_pass.py`.** 33 checks across 4 gates: (1) identity gate `_can_access()` behaviour across all 7 session states, (2) all 16 admin routes have `Depends(require_admin)` with JWKS/issuer/audience/kid validation, (3) no file-based logging and `verify_identity` args are redacted before DB write, (4) AST-based separation invariants (docstrings excluded). Run without DB or Ollama. Fails loudly (exit 1) if any check breaks.
